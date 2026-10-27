@@ -1,3 +1,4 @@
+import logging
 import os
 import sqlite3
 from datetime import datetime
@@ -13,49 +14,135 @@ def get_conn():
 
 def init_db():
     with get_conn() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER UNIQUE NOT NULL,
-                username TEXT,
-                first_name TEXT,
-                last_seen TEXT
-            );
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS auto_replies (
                 user_id INTEGER PRIMARY KEY,
                 text TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                updated_at TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                updated_at TEXT
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 text TEXT,
-                received_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
+                received_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL
-            );
+            )
         """)
+
+        info = conn.execute("PRAGMA table_info(users)").fetchall()
+        if not info:
+            conn.execute("""
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_id INTEGER UNIQUE,
+                    username TEXT,
+                    first_name TEXT,
+                    last_seen TEXT
+                )
+            """)
+        else:
+            tg_col = next((c for c in info if c["name"] == "telegram_id"), None)
+            if tg_col and tg_col["notnull"] == 1:
+                logging.info("Migrating users table: telegram_id becomes nullable")
+                conn.executescript("""
+                    CREATE TABLE users_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        telegram_id INTEGER UNIQUE,
+                        username TEXT,
+                        first_name TEXT,
+                        last_seen TEXT
+                    );
+                    INSERT INTO users_new (id, telegram_id, username, first_name, last_seen)
+                        SELECT id, telegram_id, username, first_name, last_seen FROM users;
+                    DROP TABLE users;
+                    ALTER TABLE users_new RENAME TO users;
+                """)
+
+
+def add_user_by_telegram_id(telegram_id, username=None, first_name=None):
+    now = datetime.utcnow().isoformat()
+    with get_conn() as conn:
+        row = conn.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+        if row:
+            conn.execute("""
+                UPDATE users SET
+                    username = COALESCE(?, username),
+                    first_name = COALESCE(?, first_name),
+                    last_seen = ?
+                WHERE id = ?
+            """, (username, first_name, now, row["id"]))
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO users (telegram_id, username, first_name, last_seen) VALUES (?, ?, ?, ?)",
+            (telegram_id, username, first_name, now),
+        )
+        return cur.lastrowid
+
+
+def add_user_by_username(username, first_name=None):
+    username_clean = username.lstrip("@").strip()
+    if not username_clean:
+        raise ValueError("Username пустой")
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,)
+        ).fetchone()
+        if row:
+            if first_name:
+                conn.execute(
+                    "UPDATE users SET first_name = COALESCE(first_name, ?) WHERE id = ?",
+                    (first_name, row["id"]),
+                )
+            return row["id"]
+        cur = conn.execute(
+            "INSERT INTO users (telegram_id, username, first_name, last_seen) VALUES (NULL, ?, ?, ?)",
+            (username_clean, first_name, datetime.utcnow().isoformat()),
+        )
+        return cur.lastrowid
+
+
+def delete_user(user_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM auto_replies WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM messages WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
 def upsert_user(telegram_id, username, first_name):
     now = datetime.utcnow().isoformat()
     with get_conn() as conn:
-        conn.execute("""
-            INSERT INTO users (telegram_id, username, first_name, last_seen)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(telegram_id) DO UPDATE SET
-                username = excluded.username,
-                first_name = excluded.first_name,
-                last_seen = excluded.last_seen
-        """, (telegram_id, username, first_name, now))
         row = conn.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        return row["id"]
+        if row:
+            conn.execute(
+                "UPDATE users SET username=?, first_name=?, last_seen=? WHERE id=?",
+                (username, first_name, now, row["id"]),
+            )
+            return row["id"]
+        if username:
+            row = conn.execute(
+                "SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND telegram_id IS NULL",
+                (username,),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE users SET telegram_id=?, first_name=?, last_seen=? WHERE id=?",
+                    (telegram_id, first_name, now, row["id"]),
+                )
+                return row["id"]
+        cur = conn.execute(
+            "INSERT INTO users (telegram_id, username, first_name, last_seen) VALUES (?, ?, ?, ?)",
+            (telegram_id, username, first_name, now),
+        )
+        return cur.lastrowid
 
 
 def get_user_by_internal_id(user_id):
@@ -69,7 +156,7 @@ def list_users():
             SELECT u.*, ar.text AS reply_text, ar.enabled AS reply_enabled
             FROM users u
             LEFT JOIN auto_replies ar ON ar.user_id = u.id
-            ORDER BY u.last_seen DESC
+            ORDER BY (u.telegram_id IS NULL), u.last_seen DESC
         """).fetchall()
 
 
@@ -121,8 +208,6 @@ def get_messages(user_id, limit=10):
             (user_id, limit),
         ).fetchall()
 
-
-# ---------- Шаблоны ----------
 
 def add_template(text):
     with get_conn() as conn:
