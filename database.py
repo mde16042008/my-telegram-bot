@@ -226,3 +226,19 @@ def list_templates():
 def delete_template(template_id):
     with get_conn() as conn:
         conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+
+def get_user_by_telegram_id(telegram_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+
+
+def get_user_by_username(username):
+    username_clean = username.lstrip("@").strip()
+    if not username_clean:
+        return None
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username_clean,)
+        ).fetchone()
