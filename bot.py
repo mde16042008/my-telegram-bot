@@ -157,6 +157,56 @@ async def admin_backup(message: Message):
         logging.error(f"Backup error: {e}")
         await message.answer(f"Ошибка бэкапа: {e}")
 
+@router.message(F.from_user.id == ADMIN_ID, Command("add_user"))
+async def admin_add_user(message: Message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        await message.answer(
+            "Использование:\n"
+            "/add_user @username [текст автоответа]\n"
+            "/add_user 123456789 [текст автоответа]\n\n"
+            "Пользователь будет добавлен в базу. Telegram ID подставится автоматически, "
+            "когда он впервые напишет вам в личку."
+        )
+        return
+    target = parts[1]
+    reply_text = parts[2] if len(parts) > 2 else None
+
+    try:
+        if target.lstrip("-").isdigit():
+            user_id = db.add_user_by_telegram_id(int(target))
+            ident = f"telegram_id={target}"
+        else:
+            user_id = db.add_user_by_username(target)
+            ident = f"@{target.lstrip('@')}"
+    except Exception as e:
+        await message.answer(f"Ошибка: {e}")
+        return
+
+    if reply_text:
+        db.set_auto_reply(user_id, reply_text, enabled=True)
+        await message.answer(f"✅ {ident} добавлен (id={user_id}) с автоответом:\n{reply_text}")
+    else:
+        await message.answer(f"✅ {ident} добавлен (id={user_id}). Автоответ пока не задан.")
+
+
+@router.message(F.from_user.id == ADMIN_ID, Command("del_user"))
+async def admin_del_user(message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Использование: /del_user <id>")
+        return
+    try:
+        user_id = int(parts[1])
+    except ValueError:
+        await message.answer("id должен быть числом")
+        return
+    if not db.get_user_by_internal_id(user_id):
+        await message.answer(f"Пользователь с id={user_id} не найден")
+        return
+    db.delete_user(user_id)
+    await message.answer(f"🗑 Пользователь id={user_id} удалён вместе с сообщениями и настройками")
+
 
 # ---------- Whoami ----------
 
