@@ -1,0 +1,7 @@
+aiogram==3.22.0
+python-dotenv
+fastapi
+uvicorn
+python-multipart
+aiohttp-socks
+tgwsapiproxy
