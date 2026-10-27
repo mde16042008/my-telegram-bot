@@ -31,6 +31,8 @@ async def admin_start(message: Message):
     await message.answer(
         "Привет, админ!\n\n"
         "/users — список пользователей\n"
+        "/add_user <@username|id> [текст] — добавить вручную\n"
+        "/del_user <id> — удалить пользователя\n"
         "/reply <id> <текст> — задать автоответ\n"
         "/toggle <id> — вкл/выкл автоответ\n"
         "/inbox <id> — последние сообщения\n"
