@@ -1,7 +1,6 @@
+import os
 import sqlite3
 from datetime import datetime
-
-import os
 
 DB_PATH = "/data/bot.db" if os.path.isdir("/data") else "bot.db"
 
@@ -36,6 +35,11 @@ def init_db():
                 received_at TEXT NOT NULL,
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
         """)
 
 
@@ -50,9 +54,7 @@ def upsert_user(telegram_id, username, first_name):
                 first_name = excluded.first_name,
                 last_seen = excluded.last_seen
         """, (telegram_id, username, first_name, now))
-        row = conn.execute(
-            "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
-        ).fetchone()
+        row = conn.execute("SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
         return row["id"]
 
 
@@ -86,24 +88,18 @@ def set_auto_reply(user_id, text, enabled=True):
 
 def toggle_auto_reply(user_id):
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT enabled FROM auto_replies WHERE user_id = ?", (user_id,)
-        ).fetchone()
+        row = conn.execute("SELECT enabled FROM auto_replies WHERE user_id = ?", (user_id,)).fetchone()
         if not row:
             return None
         new_state = 0 if row["enabled"] else 1
-        conn.execute(
-            "UPDATE auto_replies SET enabled = ? WHERE user_id = ?",
-            (new_state, user_id),
-        )
+        conn.execute("UPDATE auto_replies SET enabled = ? WHERE user_id = ?", (new_state, user_id))
         return bool(new_state)
 
 
 def get_active_reply(telegram_id):
     with get_conn() as conn:
         row = conn.execute("""
-            SELECT ar.text
-            FROM auto_replies ar
+            SELECT ar.text FROM auto_replies ar
             JOIN users u ON u.id = ar.user_id
             WHERE u.telegram_id = ? AND ar.enabled = 1
         """, (telegram_id,)).fetchone()
@@ -120,7 +116,28 @@ def save_message(user_id, text):
 
 def get_messages(user_id, limit=10):
     with get_conn() as conn:
-        return conn.execute("""
-            SELECT * FROM messages WHERE user_id = ?
-            ORDER BY received_at DESC LIMIT ?
-        """, (user_id, limit)).fetchall()
+        return conn.execute(
+            "SELECT * FROM messages WHERE user_id = ? ORDER BY received_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+
+
+# ---------- Шаблоны ----------
+
+def add_template(text):
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO templates (text, created_at) VALUES (?, ?)",
+            (text, datetime.utcnow().isoformat()),
+        )
+        return cur.lastrowid
+
+
+def list_templates():
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM templates ORDER BY created_at DESC").fetchall()
+
+
+def delete_template(template_id):
+    with get_conn() as conn:
+        conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
