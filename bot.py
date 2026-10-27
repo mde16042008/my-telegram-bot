@@ -13,7 +13,7 @@ import database as db
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = int(os.getenv("954768242", "0"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в .env")
 if not ADMIN_ID:
