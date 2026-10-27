@@ -70,7 +70,7 @@ select {{ padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family:
 </html>"""
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz():
     return {"status": "ok"}
 
