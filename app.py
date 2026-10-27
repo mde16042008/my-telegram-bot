@@ -24,6 +24,7 @@ async def start_bot():
     else:
         bot = Bot(token=BOT_TOKEN)
         logging.info("Бот запущен напрямую")
+    fastapi_app.state.bot = bot
     dp = Dispatcher()
     dp.include_router(router)
     await dp.start_polling(bot)
@@ -31,6 +32,12 @@ async def start_bot():
 
 async def main():
     db.init_db()
+    # Гарантируем, что админ существует
+    try:
+        from bot import ensure_admin_account
+        ensure_admin_account()
+    except Exception as e:
+        logging.warning(f"ensure_admin_account failed: {e}")
     bot_task = asyncio.create_task(start_bot())
     port = int(os.environ.get("PORT", 8080))
     config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=port, log_level="info")
