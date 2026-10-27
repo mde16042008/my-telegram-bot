@@ -419,36 +419,51 @@ async def receive_contact(message: Message):
 async def handle_business_message(message: Message):
     user = message.from_user
     if user.id == ADMIN_ID:
-        return  # свои сообщения игнорим
+        return
+
+    logging.info(
+        f"[BIZ] from={user.id} @{user.username} text={message.text!r} "
+        f"biz_id={message.business_connection_id!r} chat={message.chat.id}"
+    )
 
     contact = db.find_contact_for_reply(user.id, user.username)
     if contact:
-        # обновляем данные
+        logging.info(f"[BIZ] found existing contact id={contact['id']}")
         db.update_contact(
             contact["id"],
             telegram_id=user.id,
             username=user.username,
             first_name=user.first_name,
-            last_seen=db.datetime.utcnow().isoformat() if hasattr(db, "datetime") else None,
         )
     else:
         contact_id = db.add_contact(
             telegram_id=user.id, username=user.username, first_name=user.first_name,
         )
         contact = db.get_contact(contact_id)
+        logging.info(f"[BIZ] created new contact id={contact['id']}")
 
     db.save_message(contact["id"], message.text)
 
     reply_text = db.get_active_reply_for_contact(contact["id"])
-    if reply_text:
-        try:
-            await message.bot.send_message(
-                business_connection_id=message.business_connection_id,
-                chat_id=message.chat.id,
-                text=reply_text,
-            )
-        except Exception as e:
-            logging.error(f"Не удалось отправить бизнес-ответ: {e}")
+    logging.info(f"[BIZ] contact_id={contact['id']} reply_text={reply_text!r}")
+
+    if not reply_text:
+        logging.info("[BIZ] no active auto-reply — skipping send")
+        return
+
+    if not message.business_connection_id:
+        logging.error("[BIZ] business_connection_id is None — cannot reply")
+        return
+
+    try:
+        sent = await message.bot.send_message(
+            business_connection_id=message.business_connection_id,
+            chat_id=message.chat.id,
+            text=reply_text,
+        )
+        logging.info(f"[BIZ] reply sent OK, message_id={sent.message_id}")
+    except Exception as e:
+        logging.exception(f"[BIZ] send failed: {e}")
 
 
 async def main():
