@@ -147,12 +147,17 @@ async def handle_business_message(message: Message):
 
 async def main():
     db.init_db()
-    PROXY_URL = "http://127.0.0.1:8080"
-    session = AiohttpSession(proxy=PROXY_URL)
-    bot = Bot(token=BOT_TOKEN, session=session)
+    PROXY_URL = os.getenv("PROXY_URL")  # опционально
+    if PROXY_URL:
+        session = AiohttpSession(proxy=PROXY_URL)
+        bot = Bot(token=BOT_TOKEN, session=session)
+        logging.info(f"Бот запущен через прокси {PROXY_URL}, слушаю сообщения...")
+    else:
+        bot = Bot(token=BOT_TOKEN)
+        logging.info("Бот запущен напрямую, слушаю сообщения...")
+
     dp = Dispatcher()
     dp.include_router(router)
-    logging.info("Бот запущен через прокси, слушаю сообщения...")
     await dp.start_polling(bot)
 
 
