@@ -87,6 +87,7 @@ async def index(username: str = Depends(verify_credentials)):
     for u in users:
         user_id = u["id"]
         username_attr = f"@{u['username']}" if u["username"] else "—"
+        tg_id = u["telegram_id"] if u["telegram_id"] else "—"
         name = html.escape(u["first_name"] or "")
         reply_text = html.escape(u["reply_text"] or "")
         enabled = bool(u["reply_enabled"])
@@ -96,7 +97,7 @@ async def index(username: str = Depends(verify_credentials)):
         rows.append(f"""
         <tr>
             <td>{user_id}</td>
-            <td><b>{name}</b><br><small>{username_attr}</small></td>
+            <td><b>{name or '—'}</b><br><small>{username_attr}</small><br><small style="color:#999;">tg: {tg_id}</small></td>
             <td>{status_html}</td>
             <td>
                 <form method="post" action="/reply" style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
@@ -114,11 +115,14 @@ async def index(username: str = Depends(verify_credentials)):
                     <button type="submit" class="btn {toggle_class} btn-sm">{toggle_label}</button>
                 </form>
                 <a href="/messages/{user_id}" class="btn btn-primary btn-sm" title="Сообщения">📩</a>
+                <form method="post" action="/delete_user/{user_id}" style="display:inline;" onsubmit="return confirm('Удалить пользователя id={user_id}?');">
+                    <button type="submit" class="btn btn-danger btn-sm" title="Удалить">🗑</button>
+                </form>
             </td>
         </tr>
         """)
     if not users:
-        content = '<div class="empty">Пока никто не писал. Как только кто-то напишет вам в личку — он появится здесь.</div>'
+        content = '<div class="empty">Пока никто не писал. Добавьте вручную через форму выше или подождите сообщения.</div>'
     else:
         content = f"""<table>
             <thead><tr><th>ID</th><th>Пользователь</th><th>Статус</th><th>Автоответ</th><th>Действия</th></tr></thead>
@@ -131,7 +135,11 @@ async def index(username: str = Depends(verify_credentials)):
         <a href="/templates">📝 Шаблоны</a>
         <a href="/backup">💾 Скачать бэкап БД</a>
     </div>
-    <p style="color:#666;">Контакты, которые вам писали (через Telegram Business)</p>
+    <form method="post" action="/add_user" style="display:flex; gap:6px; margin: 1em 0;">
+        <input type="text" name="target" placeholder="@username или числовой telegram_id" required style="flex:1;">
+        <button type="submit" class="btn btn-success">➕ Добавить</button>
+    </form>
+    <p style="color:#666;">Контакты, которые вам писали (через Telegram Business), и добавленные вручную</p>
     {content}
     """
     return render_page("Автоответчик", body)
@@ -225,3 +233,21 @@ async def backup_route(username: str = Depends(verify_credentials)):
     if not os.path.exists(db.DB_PATH):
         raise HTTPException(404, "Файл базы данных ещё не создан")
     return FileResponse(db.DB_PATH, filename="bot.db", media_type="application/octet-stream")
+
+@app.post("/add_user")
+async def add_user_route(target: str = Form(...), username: str = Depends(verify_credentials)):
+    target = target.strip()
+    try:
+        if target.lstrip("-").isdigit():
+            db.add_user_by_telegram_id(int(target))
+        else:
+            db.add_user_by_username(target)
+    except Exception:
+        pass
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/delete_user/{user_id}")
+async def delete_user_route(user_id: int, username: str = Depends(verify_credentials)):
+    db.delete_user(user_id)
+    return RedirectResponse("/", status_code=303)
