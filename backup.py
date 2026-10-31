@@ -37,23 +37,25 @@ async def cmd_backup(message: Message):
 @router.message(F.from_user.id == BACKUP_CHAT_ID, F.document)
 async def receive_restore(message: Message):
     doc = message.document
+    logging.info(f"[RESTORE] received file: {doc.file_name}, size={doc.file_size}, db_path={db.DB_PATH}")
     if not doc.file_name.endswith(".db"):
-        await message.answer("❌ Нужен файл с расширением .db")
+        await message.answer(f"❌ Нужен файл .db, а пришёл {doc.file_name}")
         return
 
     file = await message.bot.get_file(doc.file_id)
     temp_path = "restore_temp.db"
-    await message.bot.download_file(file.file_path, temp_path)
-
     try:
+        await message.bot.download_file(file.file_path, temp_path)
+        logging.info(f"[RESTORE] downloaded to {temp_path}, size={os.path.getsize(temp_path)}")
         shutil.copy(temp_path, db.DB_PATH)
         os.remove(temp_path)
+        logging.info(f"[RESTORE] copied to {db.DB_PATH}, size={os.path.getsize(db.DB_PATH)}")
         await message.answer(
             "✅ База восстановлена.\n"
             "Перезапустите сервис на Render (Manual Deploy → Restart)."
         )
     except Exception as e:
-        logging.error(f"Restore failed: {e}")
+        logging.exception(f"[RESTORE] failed: {e}")
         await message.answer(f"❌ Ошибка восстановления: {e}")
 
 
