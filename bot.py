@@ -493,29 +493,31 @@ async def receive_contact(message: Message):
 @router.business_message()
 async def handle_business_message(message: Message):
     user = message.from_user
+    logging.info(f"[BIZ] INCOMING from={user.id} @{user.username} biz_id={message.business_connection_id}")
+
     if user.id == ADMIN_ID:
+        logging.info("[BIZ] from admin — skip")
         return
 
-    # Определяем владельца бизнес-аккаунта
     try:
         conn_info = await message.bot.get_business_connection(message.business_connection_id)
         owner_id = conn_info.user.id
+        owner_user = conn_info.user
+        logging.info(f"[BIZ] owner_id={owner_id} @{owner_user.username}")
     except Exception as e:
-        logging.error(f"[BIZ] cannot get business connection: {e}")
+        logging.exception(f"[BIZ] get_business_connection failed: {e}")
         return
 
-    # Проверяем, одобрен ли владелец
     if owner_id != ADMIN_ID and not db.is_user_approved(owner_id):
-        logging.info(f"[BIZ] owner {owner_id} not approved — creating request")
-        owner_req = db.create_or_get_request(owner_id, conn_info.user.username, conn_info.user.first_name)
-        if owner_req["status"] == "pending":
+        logging.info(f"[BIZ] owner {owner_id} not approved")
+        req = db.create_or_get_request(owner_id, owner_user.username, owner_user.first_name)
+        if req["status"] == "pending":
             try:
                 await message.bot.send_message(
                     ADMIN_ID,
                     f"🔔 Новый запрос на использование бота\n\n"
-                    f"👤 {conn_info.user.first_name or ''} @{conn_info.user.username or '—'}\n"
-                    f"🆔 `{owner_id}`\n\n"
-                    f"Подключил бота к своему Business.",
+                    f"👤 {owner_user.first_name or ''} @{owner_user.username or '—'}\n"
+                    f"🆔 `{owner_id}`",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                         InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{owner_id}"),
@@ -525,6 +527,28 @@ async def handle_business_message(message: Message):
             except Exception:
                 pass
         return
+
+    # — дальше без изменений —
+    contact = db.find_contact_for_reply(user.id, user.username, owner_id)
+    if contact:
+        db.update_contact(contact["id"], telegram_id=user.id, username=user.username, first_name=user.first_name)
+    else:
+        cid = db.add_contact(telegram_id=user.id, username=user.username, first_name=user.first_name, business_owner_id=owner_id)
+        contact = db.get_contact(cid)
+    db.save_message(contact["id"], message.text)
+    logging.info(f"[BIZ] saved: contact_id={contact['id']}")
+
+    reply_text = db.get_active_reply_for_contact(contact["id"])
+    if reply_text and message.business_connection_id:
+        try:
+            await message.bot.send_message(
+                business_connection_id=message.business_connection_id,
+                chat_id=message.chat.id,
+                text=reply_text,
+            )
+            logging.info(f"[BIZ] replied")
+        except Exception as e:
+            logging.exception(f"[BIZ] send failed: {e}")
 
     # Дальше — обычная логика, но с business_owner_id
     contact = db.find_contact_for_reply(user.id, user.username, owner_id)
