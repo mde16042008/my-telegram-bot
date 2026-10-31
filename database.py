@@ -367,10 +367,11 @@ def create_or_get_request(telegram_id, username, first_name):
         ).fetchone()
         if row:
             return row
-        conn.execute("""
-            INSERT INTO access_requests (telegram_id, username, first_name, status, created_at)
-            VALUES (?, ?, ?, 'pending', ?)
-        """, (telegram_id, username, first_name, datetime.utcnow().isoformat()))
+        conn.execute(
+            "INSERT INTO access_requests (telegram_id, username, first_name, status, created_at) "
+            "VALUES (?, ?, ?, 'pending', ?)",
+            (telegram_id, username, first_name, datetime.utcnow().isoformat()),
+        )
         return conn.execute(
             "SELECT * FROM access_requests WHERE telegram_id = ?", (telegram_id,)
         ).fetchone()
