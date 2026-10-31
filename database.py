@@ -77,6 +77,23 @@ def init_db():
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (owner_id) REFERENCES system_users(id) ON DELETE CASCADE
+
+                conn.execute("""
+            CREATE TABLE IF NOT EXISTS access_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER UNIQUE NOT NULL,
+                username TEXT,
+                first_name TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                reviewed_at TEXT
+            )
+        """)
+        # Миграция: добавить business_owner_id в contacts, если нет
+        cols = [c["name"] for c in conn.execute("PRAGMA table_info(contacts)").fetchall()]
+        if "business_owner_id" not in cols:
+            conn.execute("ALTER TABLE contacts ADD COLUMN business_owner_id INTEGER")
+            
             );
         """)
 
