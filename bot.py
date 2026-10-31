@@ -2,9 +2,10 @@ import asyncio
 import logging
 import os
 
+
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import (     Message, FSInputFile, KeyboardButton, ReplyKeyboardMarkup,     ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, )
 from aiogram.client.session.aiohttp import AiohttpSession
 from dotenv import load_dotenv
 
@@ -97,6 +98,80 @@ async def admin_start(message: Message):
         "/del_operator <логин> — удалить оператора\n"
         "/backup — скачать базу"
     )
+
+# ---------- Заявки от не-админов ----------
+
+@router.message(Command("start"), F.from_user.id != ADMIN_ID)
+async def user_start(message: Message):
+    user = message.from_user
+    if db.is_user_approved(user.id):
+        await message.answer(
+            "✅ У вас уже есть доступ.\n"
+            "Подключите бота к своему Telegram Business: "
+            "Настройки → Telegram Business → Чат-боты → @Morfiuss_1_bot."
+        )
+        return
+
+    req = db.create_or_get_request(user.id, user.username, user.first_name)
+
+    if req["status"] == "pending":
+        await message.answer(
+            "⏳ Ваша заявка отправлена владельцу бота.\n"
+            "Пожалуйста, подождите одобрения — как только владелец разрешит доступ, вы получите уведомление."
+        )
+        try:
+            await message.bot.send_message(
+                ADMIN_ID,
+                f"🔔 Новый запрос на доступ\n\n"
+                f"👤 {user.first_name or ''} @{user.username or '—'}\n"
+                f"🆔 `{user.id}`\n\n"
+                f"Нажмите кнопку, чтобы одобрить или отклонить.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{user.id}"),
+                    InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{user.id}"),
+                ]]),
+            )
+        except Exception as e:
+            logging.error(f"cannot notify admin: {e}")
+    elif req["status"] == "rejected":
+        await message.answer("❌ Ваша заявка была отклонена владельцем бота.")
+    elif req["status"] == "approved":
+        await message.answer("✅ Доступ одобрен! Подключите бота к Telegram Business.")
+
+
+# ---------- Кнопки одобрения/отклонения ----------
+
+@router.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("approve_"))
+async def cb_approve(callback: CallbackQuery):
+    user_id = int(callback.data.split("_", 1)[1])
+    db.approve_request(user_id)
+    req = db.get_request_by_telegram_id(user_id)
+    try:
+        await callback.bot.send_message(
+            user_id,
+            "🎉 Владелец бота одобрил ваш доступ!\n\n"
+            "Теперь подключите @Morfiuss_1_bot к своему Telegram Business:\n"
+            "Настройки → Telegram Business → Чат-боты → добавьте @Morfiuss_1_bot.\n"
+            "Разрешите чтение и ответы. После этого бот будет отвечать на ваши сообщения."
+        )
+    except Exception:
+        pass
+    await callback.message.edit_text(f"✅ Заявка @{req['username'] or user_id} одобрена.")
+    await callback.answer()
+
+
+@router.callback_query(F.from_user.id == ADMIN_ID, F.data.startswith("reject_"))
+async def cb_reject(callback: CallbackQuery):
+    user_id = int(callback.data.split("_", 1)[1])
+    db.reject_request(user_id)
+    req = db.get_request_by_telegram_id(user_id)
+    try:
+        await callback.bot.send_message(user_id, "❌ К сожалению, владелец бота отклонил вашу заявку.")
+    except Exception:
+        pass
+    await callback.message.edit_text(f"❌ Заявка @{req['username'] or user_id} отклонена.")
+    await callback.answer()
 
 
 @router.message(F.from_user.id == ADMIN_ID, Command("users"))
@@ -421,49 +496,57 @@ async def handle_business_message(message: Message):
     if user.id == ADMIN_ID:
         return
 
-    logging.info(
-        f"[BIZ] from={user.id} @{user.username} text={message.text!r} "
-        f"biz_id={message.business_connection_id!r} chat={message.chat.id}"
-    )
+    # Определяем владельца бизнес-аккаунта
+    try:
+        conn_info = await message.bot.get_business_connection(message.business_connection_id)
+        owner_id = conn_info.user.id
+    except Exception as e:
+        logging.error(f"[BIZ] cannot get business connection: {e}")
+        return
 
-    contact = db.find_contact_for_reply(user.id, user.username)
+    # Проверяем, одобрен ли владелец
+    if owner_id != ADMIN_ID and not db.is_user_approved(owner_id):
+        logging.info(f"[BIZ] owner {owner_id} not approved — creating request")
+        owner_req = db.create_or_get_request(owner_id, conn_info.user.username, conn_info.user.first_name)
+        if owner_req["status"] == "pending":
+            try:
+                await message.bot.send_message(
+                    ADMIN_ID,
+                    f"🔔 Новый запрос на использование бота\n\n"
+                    f"👤 {conn_info.user.first_name or ''} @{conn_info.user.username or '—'}\n"
+                    f"🆔 `{owner_id}`\n\n"
+                    f"Подключил бота к своему Business.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve_{owner_id}"),
+                        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject_{owner_id}"),
+                    ]]),
+                )
+            except Exception:
+                pass
+        return
+
+    # Дальше — обычная логика, но с business_owner_id
+    contact = db.find_contact_for_reply(user.id, user.username, owner_id)
     if contact:
-        logging.info(f"[BIZ] found existing contact id={contact['id']}")
-        db.update_contact(
-            contact["id"],
-            telegram_id=user.id,
-            username=user.username,
-            first_name=user.first_name,
-        )
+        db.update_contact(contact["id"], telegram_id=user.id, username=user.username,
+                          first_name=user.first_name)
     else:
-        contact_id = db.add_contact(
-            telegram_id=user.id, username=user.username, first_name=user.first_name,
-        )
-        contact = db.get_contact(contact_id)
-        logging.info(f"[BIZ] created new contact id={contact['id']}")
+        cid = db.add_contact(telegram_id=user.id, username=user.username,
+                             first_name=user.first_name, business_owner_id=owner_id)
+        contact = db.get_contact(cid)
 
     db.save_message(contact["id"], message.text)
-
     reply_text = db.get_active_reply_for_contact(contact["id"])
-    logging.info(f"[BIZ] contact_id={contact['id']} reply_text={reply_text!r}")
-
-    if not reply_text:
-        logging.info("[BIZ] no active auto-reply — skipping send")
-        return
-
-    if not message.business_connection_id:
-        logging.error("[BIZ] business_connection_id is None — cannot reply")
-        return
-
-    try:
-        sent = await message.bot.send_message(
-            business_connection_id=message.business_connection_id,
-            chat_id=message.chat.id,
-            text=reply_text,
-        )
-        logging.info(f"[BIZ] reply sent OK, message_id={sent.message_id}")
-    except Exception as e:
-        logging.exception(f"[BIZ] send failed: {e}")
+    if reply_text and message.business_connection_id:
+        try:
+            await message.bot.send_message(
+                business_connection_id=message.business_connection_id,
+                chat_id=message.chat.id,
+                text=reply_text,
+            )
+        except Exception as e:
+            logging.error(f"[BIZ] send failed: {e}")
 
 
 async def main():
