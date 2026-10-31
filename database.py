@@ -93,9 +93,6 @@ def init_db():
         cols = [c["name"] for c in conn.execute("PRAGMA table_info(contacts)").fetchall()]
         if "business_owner_id" not in cols:
             conn.execute("ALTER TABLE contacts ADD COLUMN business_owner_id INTEGER")
-            
-            );
-        """)
 
         # ---- Миграция старых таблиц (users/auto_replies/messages) ----
         info = conn.execute("PRAGMA table_info(users)").fetchall()
