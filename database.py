@@ -419,6 +419,6 @@ def reject_request(telegram_id):
 
 
 def is_user_approved(telegram_id):
-    """Админ всегда одобрен. Остальные — только при status='approved'."""
+    """Админ всегда одобрен. Остальные - только при status='approved'."""
     req = get_request_by_telegram_id(telegram_id)
     return bool(req and req["status"] == "approved")
