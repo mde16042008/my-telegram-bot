@@ -150,7 +150,7 @@ THEME_SWITCHER = """
 
 def topnav(user):
     is_admin = user["role"] == "admin"
-    admin_link = '<a href="/admin">👥 Операторы</a>' if is_admin else ""
+    admin_link = '<a href="/admin">👥 Операторы</a> <a href="/requests">📨 Заявки</a>' if is_admin else ""
     return f"""
     <div class="topnav">
         <a href="/">🏠 Контакты</a>
@@ -508,3 +508,67 @@ async def change_password(new_password: str = Form(...), user=Depends(current_us
         raise HTTPException(400, "Пароль слишком короткий")
     db.change_password(user["id"], new_password)
     return RedirectResponse("/admin", status_code=303)
+# ---------- Заявки на доступ ----------
+
+@app.get("/requests", response_class=HTMLResponse)
+async def requests_page(user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(403)
+    reqs = db.list_requests()
+    rows = []
+    for r in reqs:
+        status_map = {"pending": "⏳ ожидает", "approved": "✅ одобрена", "rejected": "❌ отклонена"}
+        status = status_map.get(r["status"], r["status"])
+        actions = ""
+        if r["status"] == "pending":
+            actions = f"""
+            <form method="post" action="/requests/approve/{r['telegram_id']}" style="display:inline;">
+                <button type="submit" class="btn btn-success btn-sm">Одобрить</button>
+            </form>
+            <form method="post" action="/requests/reject/{r['telegram_id']}" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm">Отклонить</button>
+            </form>"""
+        elif r["status"] == "approved":
+            actions = f"""
+            <form method="post" action="/requests/reject/{r['telegram_id']}" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm">Отозвать доступ</button>
+            </form>"""
+        else:
+            actions = f"""
+            <form method="post" action="/requests/approve/{r['telegram_id']}" style="display:inline;">
+                <button type="submit" class="btn btn-success btn-sm">Одобрить снова</button>
+            </form>"""
+        rows.append(f"""
+        <tr>
+            <td>{r['id']}</td>
+            <td>{html.escape(r['first_name'] or '—')}<br><small>@{html.escape(r['username'] or '—')}</small></td>
+            <td>{r['telegram_id']}</td>
+            <td>{status}</td>
+            <td>{actions}</td>
+        </tr>""")
+    body = f"""
+    {topnav(user)}
+    <h1>📨 Заявки на доступ</h1>
+    <p class="muted">Пользователи, которые хотят использовать вашего бота для своего Telegram Business.</p>
+    <table>
+        <thead><tr><th>ID</th><th>Пользователь</th><th>Telegram ID</th><th>Статус</th><th>Действия</th></tr></thead>
+        <tbody>{''.join(rows) if rows else '<tr><td colspan="5" class="empty">Заявок нет</td></tr>'}</tbody>
+    </table>
+    """
+    return render_page("Заявки", body)
+
+
+@app.post("/requests/approve/{telegram_id}")
+async def approve_route(telegram_id: int, user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(403)
+    db.approve_request(telegram_id)
+    return RedirectResponse("/requests", status_code=303)
+
+
+@app.post("/requests/reject/{telegram_id}")
+async def reject_route(telegram_id: int, user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(403)
+    db.reject_request(telegram_id)
+    return RedirectResponse("/requests", status_code=303)
