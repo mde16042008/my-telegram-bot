@@ -184,14 +184,15 @@ def change_password(user_id, new_password):
 # ---------- Контакты ----------
 
 def add_contact(assigned_to=None, telegram_id=None, username=None, first_name=None,
-                phone=None, last_seen=None):
+                phone=None, last_seen=None, business_owner_id=None):
     with get_conn() as conn:
         cur = conn.execute("""
-            INSERT INTO contacts (assigned_to, telegram_id, username, first_name, phone, last_seen, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO contacts (assigned_to, telegram_id, username, first_name, phone,
+                                  last_seen, created_at, business_owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (assigned_to, telegram_id, username, first_name, phone,
               last_seen or datetime.utcnow().isoformat(),
-              datetime.utcnow().isoformat()))
+              datetime.utcnow().isoformat(), business_owner_id))
         return cur.lastrowid
 
 
@@ -231,7 +232,7 @@ def get_contact_by_phone(phone):
         return conn.execute("SELECT * FROM contacts WHERE phone = ?", (phone,)).fetchone()
 
 
-def list_contacts(assigned_to=None, include_all=False):
+def list_contacts(assigned_to=None, include_all=False, business_owner_id=None):
     with get_conn() as conn:
         if include_all:
             return conn.execute("""
@@ -242,6 +243,14 @@ def list_contacts(assigned_to=None, include_all=False):
                 LEFT JOIN system_users su ON su.id = c.assigned_to
                 ORDER BY c.last_seen DESC
             """).fetchall()
+        if business_owner_id is not None:
+            return conn.execute("""
+                SELECT c.*, ar.text AS reply_text, ar.enabled AS reply_enabled
+                FROM contacts c
+                LEFT JOIN auto_replies ar ON ar.contact_id = c.id
+                WHERE c.business_owner_id = ?
+                ORDER BY c.last_seen DESC
+            """, (business_owner_id,)).fetchall()
         return conn.execute("""
             SELECT c.*, ar.text AS reply_text, ar.enabled AS reply_enabled
             FROM contacts c
@@ -256,14 +265,20 @@ def delete_contact(contact_id):
         conn.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
 
 
-def find_contact_for_reply(tg_id, username):
-    """Ищет контакт по telegram_id, потом по username (для привязки ранее добавленных)."""
-    contact = get_contact_by_telegram_id(tg_id)
-    if contact:
-        return contact
-    if username:
-        return get_contact_by_username(username)
-    return None
+def find_contact_for_reply(tg_id, username, business_owner_id):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM contacts WHERE telegram_id = ? AND business_owner_id = ?",
+            (tg_id, business_owner_id),
+        ).fetchone()
+        if row:
+            return row
+        if username:
+            return conn.execute(
+                "SELECT * FROM contacts WHERE LOWER(username) = LOWER(?) AND business_owner_id = ?",
+                (username.lstrip("@"), business_owner_id),
+            ).fetchone()
+        return None
 
 
 # ---------- Автоответы ----------
@@ -346,3 +361,67 @@ def delete_template(template_id, requester_id=None, is_admin=False):
             conn.execute(
                 "DELETE FROM templates WHERE id = ? AND owner_id = ?", (template_id, requester_id)
             )
+# ---------- Заявки на доступ ----------
+
+def create_or_get_request(telegram_id, username, first_name):
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM access_requests WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+        if row:
+            return row
+        conn.execute("""
+            INSERT INTO access_requests (telegram_id, username, first_name, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+        """, (telegram_id, username, first_name, datetime.utcnow().isoformat()))
+        return conn.execute(
+            "SELECT * FROM access_requests WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+
+
+def get_request_by_telegram_id(telegram_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM access_requests WHERE telegram_id = ?", (telegram_id,)
+        ).fetchone()
+
+
+def get_request_by_id(request_id):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM access_requests WHERE id = ?", (request_id,)
+        ).fetchone()
+
+
+def list_requests(status=None):
+    with get_conn() as conn:
+        if status:
+            return conn.execute(
+                "SELECT * FROM access_requests WHERE status = ? ORDER BY created_at DESC",
+                (status,),
+            ).fetchall()
+        return conn.execute(
+            "SELECT * FROM access_requests ORDER BY created_at DESC"
+        ).fetchall()
+
+
+def approve_request(telegram_id):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE access_requests SET status = 'approved', reviewed_at = ? WHERE telegram_id = ?",
+            (datetime.utcnow().isoformat(), telegram_id),
+        )
+
+
+def reject_request(telegram_id):
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE access_requests SET status = 'rejected', reviewed_at = ? WHERE telegram_id = ?",
+            (datetime.utcnow().isoformat(), telegram_id),
+        )
+
+
+def is_user_approved(telegram_id):
+    """Админ всегда одобрен. Остальные — только при status='approved'."""
+    req = get_request_by_telegram_id(telegram_id)
+    return bool(req and req["status"] == "approved")
