@@ -329,18 +329,3 @@ def delete_template(template_id, requester_id=None, is_admin=False):
             conn.execute(
                 "DELETE FROM templates WHERE id = ? AND owner_id = ?", (template_id, requester_id)
             )
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS access_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER UNIQUE NOT NULL,
-                username TEXT,
-                first_name TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL,
-                reviewed_at TEXT
-            )
-        """)
-        # Миграция: добавить business_owner_id в contacts, если нет
-        cols = [c["name"] for c in conn.execute("PRAGMA table_info(contacts)").fetchall()]
-        if "business_owner_id" not in cols:
-            conn.execute("ALTER TABLE contacts ADD COLUMN business_owner_id INTEGER")
