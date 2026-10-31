@@ -71,14 +71,13 @@ def init_db():
                 received_at TEXT NOT NULL,
                 FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
             );
-            CREATE TABLE IF NOT EXISTS templates (
+                CREATE TABLE IF NOT EXISTS templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_id INTEGER,
                 text TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (owner_id) REFERENCES system_users(id) ON DELETE CASCADE
-
-                conn.execute("""
+            );
             CREATE TABLE IF NOT EXISTS access_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER UNIQUE NOT NULL,
@@ -87,7 +86,7 @@ def init_db():
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL,
                 reviewed_at TEXT
-            )
+            );
         """)
         # Миграция: добавить business_owner_id в contacts, если нет
         cols = [c["name"] for c in conn.execute("PRAGMA table_info(contacts)").fetchall()]
